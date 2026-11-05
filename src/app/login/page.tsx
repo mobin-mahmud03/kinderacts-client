@@ -3,9 +3,9 @@
 import React, { useState, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useAuth } from '@/context/AuthContext';
 import { HeartHandshake, Mail, Lock, LogIn, ArrowRight, Github, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { authClient } from '@/lib/auth-client';
 
 export default function LoginPage() {
   return (
@@ -25,11 +25,12 @@ function LoginForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const { login, socialLogin } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectPath = searchParams.get('redirect') || '/';
 
+  // Email & Password Login with BetterAuth
+    // Email & Password Login with BetterAuth + JWT Sync
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) {
@@ -38,20 +39,58 @@ function LoginForm() {
     }
 
     setLoading(true);
-    const success = await login(email, password);
-    setLoading(false);
+    try {
+      const res = await authClient.signIn.email({
+        email: email.trim(),
+        password: password,
+      });
 
-    if (success) {
-      router.push(redirectPath);
+      if (res.error) {
+        toast.error(res.error.message || 'Invalid email or password.');
+      } else {
+        // ব্যাকএন্ডের সাথে JWT টোকেন সিঙ্ক করা
+        try {
+          const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+          const jwtRes = await fetch(`${apiBase}/auth/social-login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: email.trim(),
+              name: res.data?.user?.name || 'Volunteer',
+              photoURL: res.data?.user?.image || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+            }),
+          });
+          if (jwtRes.ok) {
+            const jwtData = await jwtRes.json();
+            localStorage.setItem('kindred_token', jwtData.token);
+            localStorage.setItem('kindred_user', JSON.stringify(jwtData.user));
+          }
+        } catch (e) {
+          console.error('JWT Sync error:', e);
+        }
+
+        toast.success('Login successful!');
+        router.push(redirectPath);
+        router.refresh();
+      }
+    } catch (error) {
+      toast.error('An unexpected error occurred. Please try again.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleSocial = async (provider: 'Google' | 'GitHub') => {
-    setLoading(true);
-    const success = await socialLogin(provider);
-    setLoading(false);
-    if (success) {
-      router.push(redirectPath);
+  // Google / GitHub Social Login with BetterAuth
+  const handleSocial = async (provider: 'google' | 'github') => {
+    try {
+      setLoading(true);
+      await authClient.signIn.social({
+        provider: provider,
+        callbackURL: redirectPath || '/',
+      });
+    } catch (error) {
+      toast.error(`Unable to connect for ${provider} login.`);
+      setLoading(false);
     }
   };
 
@@ -129,7 +168,7 @@ function LoginForm() {
         <div className="grid grid-cols-2 gap-3">
           <button
             type="button"
-            onClick={() => handleSocial('Google')}
+            onClick={() => handleSocial('google')}
             disabled={loading}
             className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors"
           >
@@ -156,7 +195,7 @@ function LoginForm() {
 
           <button
             type="button"
-            onClick={() => handleSocial('GitHub')}
+            onClick={() => handleSocial('github')}
             disabled={loading}
             className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors"
           >

@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
+import { authClient } from '@/lib/auth-client';
 
 export interface User {
   id: string;
@@ -28,7 +29,10 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [initialLoading, setInitialLoading] = useState<boolean>(true);
+
+  // BetterAuth session
+  const { data: session, isPending: sessionPending } = authClient.useSession();
 
   // Restore auth session on initial mount / reload
   useEffect(() => {
@@ -43,30 +47,97 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       console.error('Failed to restore session from storage:', err);
     } finally {
-      setIsLoading(false);
+      setInitialLoading(false);
     }
   }, []);
 
+  // Bridge BetterAuth session to AuthContext & automatically fetch/sync JWT Token
+  useEffect(() => {
+    const sessionUser = (session as any)?.user;
+    if (sessionUser) {
+      const u: User = {
+        id: sessionUser.id,
+        name: sessionUser.name,
+        email: sessionUser.email,
+        photoURL:
+          sessionUser.image ||
+          'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+      };
+      setUser(u);
+      localStorage.setItem('kindred_user', JSON.stringify(u));
+
+      // If JWT token is missing in localStorage, auto-fetch from backend
+      const existingToken = localStorage.getItem('kindred_token');
+      if (!existingToken) {
+        fetch(`${API_BASE}/auth/social-login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: u.email,
+            name: u.name,
+            photoURL: u.photoURL,
+          }),
+        })
+          .then((res) => res.json())
+          .then((data) => {
+            if (data.token) {
+              setToken(data.token);
+              localStorage.setItem('kindred_token', data.token);
+            }
+          })
+          .catch((err) => console.error('Auto JWT token sync error:', err));
+      } else {
+        setToken(existingToken);
+      }
+    }
+  }, [session]);
+
+  const isLoading = initialLoading || sessionPending;
+
   const login = async (email: string, password: string): Promise<boolean> => {
     try {
-      const res = await fetch(`${API_BASE}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+      const res = await authClient.signIn.email({
+        email: email.trim(),
+        password: password,
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.message || 'Login failed. Please check your credentials.');
+      if (res.error) {
+        toast.error(res.error.message || 'Login failed.');
         return false;
       }
 
-      setUser(data.user);
-      setToken(data.token);
-      localStorage.setItem('kindred_token', data.token);
-      localStorage.setItem('kindred_user', JSON.stringify(data.user));
+      // Immediately set user in context from the login response
+      const resUser = (res as any).data?.user;
+      if (resUser) {
+        const u: User = {
+          id: resUser.id,
+          name: resUser.name,
+          email: resUser.email,
+          photoURL: resUser.image || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+        };
+        setUser(u);
+        localStorage.setItem('kindred_user', JSON.stringify(u));
+      }
 
-      toast.success(`Welcome back, ${data.user.name}!`);
+      // Fetch JWT token for backend APIs
+      try {
+        const jwtRes = await fetch(`${API_BASE}/auth/social-login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: email.trim(),
+            name: resUser?.name || 'Volunteer',
+            photoURL: resUser?.image || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+          }),
+        });
+        if (jwtRes.ok) {
+          const jwtData = await jwtRes.json();
+          setToken(jwtData.token);
+          localStorage.setItem('kindred_token', jwtData.token);
+        }
+      } catch (err) {}
+
+      toast.success('Login successful!');
       return true;
     } catch (error) {
       toast.error('Unable to connect to server. Please try again.');
@@ -76,22 +147,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const register = async (name: string, email: string, photoURL: string, password: string): Promise<boolean> => {
     try {
-      const res = await fetch(`${API_BASE}/auth/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, photoURL, password }),
+      const res = await authClient.signUp.email({
+        name: name.trim(),
+        email: email.trim(),
+        password: password,
+        image: photoURL || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80',
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.message || 'Registration failed.');
+      if (res.error) {
+        toast.error(res.error.message || 'Registration failed.');
         return false;
       }
 
-      setUser(data.user);
-      setToken(data.token);
-      localStorage.setItem('kindred_token', data.token);
-      localStorage.setItem('kindred_user', JSON.stringify(data.user));
+      // Fetch JWT token for backend APIs
+      try {
+        const jwtRes = await fetch(`${API_BASE}/auth/social-login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: email.trim(),
+            name: name.trim(),
+            photoURL: photoURL,
+          }),
+        });
+        if (jwtRes.ok) {
+          const jwtData = await jwtRes.json();
+          setToken(jwtData.token);
+          localStorage.setItem('kindred_token', jwtData.token);
+        }
+      } catch (err) {}
 
       toast.success('Registration successful! Welcome to KindredActs.');
       return true;
@@ -103,40 +187,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const socialLogin = async (provider: 'Google' | 'GitHub'): Promise<boolean> => {
     try {
-      // Mock social authentication for seamless evaluation
-      const mockProfiles = {
-        Google: {
-          name: 'Sarah Rahman',
-          email: 'sarah.rahman@gmail.com',
-          photoURL: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=300&q=80'
-        },
-        GitHub: {
-          name: 'Alex Tanvir',
-          email: 'alex.tanvir@github.com',
-          photoURL: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=300&q=80'
-        }
-      };
-
-      const selected = mockProfiles[provider];
-
-      const res = await fetch(`${API_BASE}/auth/social-login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(selected),
+      await authClient.signIn.social({
+        provider: provider.toLowerCase() as 'google' | 'github',
+        callbackURL: '/',
       });
-
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.message || `${provider} login failed.`);
-        return false;
-      }
-
-      setUser(data.user);
-      setToken(data.token);
-      localStorage.setItem('kindred_token', data.token);
-      localStorage.setItem('kindred_user', JSON.stringify(data.user));
-
-      toast.success(`Signed in with ${provider} as ${data.user.name}`);
       return true;
     } catch (error) {
       toast.error(`Unable to connect for ${provider} login.`);
@@ -144,7 +198,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await (authClient as any).signOut();
+    } catch (err) {}
     setUser(null);
     setToken(null);
     localStorage.removeItem('kindred_token');
@@ -154,14 +211,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const updateUserProfile = async (name: string, photoURL: string): Promise<boolean> => {
     try {
-      if (!token) return false;
+      let activeToken = token || localStorage.getItem('kindred_token');
+      if (!activeToken) return false;
+
       const res = await fetch(`${API_BASE}/auth/profile`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
+          Authorization: `Bearer ${activeToken}`,
         },
-        body: JSON.stringify({ name, photoURL })
+        body: JSON.stringify({ name, photoURL }),
       });
 
       const data = await res.json();
@@ -193,7 +252,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         register,
         socialLogin,
         logout,
-        updateUserProfile
+        updateUserProfile,
       }}
     >
       {children}

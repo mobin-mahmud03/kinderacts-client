@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
+import { authClient } from '@/lib/auth-client';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import {
   Calendar,
@@ -27,15 +28,45 @@ export default function JoinedEventsPage() {
 }
 
 function JoinedEventsContent() {
-  const { user, token } = useAuth();
+  const { user: contextUser, token: contextToken } = useAuth();
+  const { data: session } = authClient.useSession();
+  const sessionUser = (session as any)?.user;
+  const user = sessionUser || contextUser;
+
   const [joinedEvents, setJoinedEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
+  const getActiveToken = async () => {
+    let t = contextToken || (typeof window !== 'undefined' ? localStorage.getItem('kindred_token') : null);
+    if (!t && user?.email) {
+      try {
+        const jwtRes = await fetch(`${API_BASE}/auth/social-login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: user.email,
+            name: user.name || 'Volunteer',
+            photoURL: (user as any).image || (user as any).photoURL || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+          }),
+        });
+        if (jwtRes.ok) {
+          const jwtData = await jwtRes.json();
+          t = jwtData.token;
+          localStorage.setItem('kindred_token', jwtData.token);
+          localStorage.setItem('kindred_user', JSON.stringify(jwtData.user));
+        }
+      } catch (e) {}
+    }
+    return t;
+  };
+
   useEffect(() => {
     async function fetchJoinedEvents() {
-      if (!token) return;
       try {
         setLoading(true);
+        const token = await getActiveToken();
+        if (!token) return;
+
         const res = await fetch(`${API_BASE}/events/user/joined`, {
           headers: { Authorization: `Bearer ${token}` }
         });
@@ -51,11 +82,10 @@ function JoinedEventsContent() {
     }
 
     fetchJoinedEvents();
-  }, [token]);
+  }, [user, contextToken]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8">
-      {/* Header */}
       <div className="space-y-2 pb-6 border-b border-slate-200 dark:border-slate-800">
         <span className="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
           Volunteer Dashboard
@@ -112,10 +142,13 @@ function JoinedEventsContent() {
                   <img
                     src={item.thumbnail}
                     alt={item.eventTitle}
+                    referrerPolicy="no-referrer"
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                     onError={(e) => {
-                      (e.target as HTMLImageElement).src =
-                        'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?auto=format&fit=crop&w=800&q=80';
+                      const target = e.target as HTMLImageElement;
+                      if (target.src !== 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?auto=format&fit=crop&w=800&q=80') {
+                        target.src = 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?auto=format&fit=crop&w=800&q=80';
+                      }
                     }}
                   />
                   <div className="absolute top-3 left-3">

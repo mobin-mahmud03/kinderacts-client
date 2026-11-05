@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { authClient } from '@/lib/auth-client';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { User, Mail, Image as ImageIcon, Save, Loader2, ShieldCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -15,10 +16,21 @@ export default function ProfilePage() {
 }
 
 function ProfileContent() {
-  const { user, updateUserProfile } = useAuth();
+  const { user: contextUser, updateUserProfile } = useAuth();
+  const { data: session } = authClient.useSession();
+  const sessionUser = (session as any)?.user;
+  const user = sessionUser || contextUser;
+
   const [name, setName] = useState(user?.name || '');
-  const [photoURL, setPhotoURL] = useState(user?.photoURL || '');
+  const [photoURL, setPhotoURL] = useState((user as any)?.image || (user as any)?.photoURL || '');
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (user?.name) setName(user.name);
+    if ((user as any)?.image || (user as any)?.photoURL) {
+      setPhotoURL((user as any).image || (user as any).photoURL);
+    }
+  }, [user]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,7 +47,6 @@ function ProfileContent() {
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
       <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl p-8 sm:p-10 space-y-8">
-        {/* Header */}
         <div className="space-y-2 border-b border-slate-200 dark:border-slate-800 pb-6">
           <span className="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
             Volunteer Identity
@@ -48,11 +59,10 @@ function ProfileContent() {
           </p>
         </div>
 
-        {/* Avatar Preview */}
         <div className="flex flex-col sm:flex-row items-center gap-6 p-6 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
           <div className="relative">
             <img
-              src={photoURL || user?.photoURL || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=300&q=80'}
+              src={photoURL || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=300&q=80'}
               alt={user?.name}
               className="w-24 h-24 rounded-full object-cover ring-4 ring-emerald-500/30 shadow-md"
               onError={(e) => {
@@ -74,7 +84,6 @@ function ProfileContent() {
           </div>
         </div>
 
-        {/* Update Form */}
         <form onSubmit={handleSave} className="space-y-4">
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5">

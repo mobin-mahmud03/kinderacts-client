@@ -2,9 +2,10 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
 import { useAuth } from '@/context/AuthContext';
+import { authClient } from '@/lib/auth-client';
 import {
   HeartHandshake,
   Sun,
@@ -19,11 +20,39 @@ import {
   Menu,
   X
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 export default function Navbar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { theme, setTheme } = useTheme();
-  const { user, logout } = useAuth();
+
+  // BetterAuth Session & Legacy Context
+  const { data: session } = authClient.useSession();
+  const { user: contextUser, logout: contextLogout } = useAuth();
+
+  // Unified User: BetterAuth Session অথবা Context User
+  const sessionUser = (
+    session as unknown as {
+      user?: {
+        id: string;
+        name: string;
+        email: string;
+        image?: string | null;
+      };
+    } | null
+  )?.user;
+  const user = sessionUser
+    ? {
+        id: sessionUser.id,
+        name: sessionUser.name,
+        email: sessionUser.email,
+        photoURL:
+          sessionUser.image ||
+          'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+      }
+    : contextUser;
+
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -44,7 +73,6 @@ export default function Navbar() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Close menus on route change
   useEffect(() => {
     setDropdownOpen(false);
     setMobileMenuOpen(false);
@@ -52,6 +80,19 @@ export default function Navbar() {
 
   const toggleTheme = () => {
     setTheme(theme === 'dark' ? 'light' : 'dark');
+  };
+
+  const handleLogout = async () => {
+    try {
+      await authClient.signOut({});
+      contextLogout();
+      toast.success('Logged out successfully.');
+      router.push('/');
+      router.refresh();
+    } catch (err) {
+      contextLogout();
+      router.push('/');
+    }
   };
 
   return (
@@ -126,10 +167,10 @@ export default function Navbar() {
                   <button
                     onClick={() => setDropdownOpen(!dropdownOpen)}
                     className="flex items-center gap-2 p-1 pl-2 pr-3 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-colors group"
-                    title={user.name} // On hovering over profile picture, show user display name
+                    title={user.name} // Hover shows user display name
                   >
                     <img
-                      src={user.photoURL || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80'}
+                      src={user.photoURL}
                       alt={user.name}
                       className="w-8 h-8 rounded-full object-cover ring-2 ring-emerald-500/50"
                     />
@@ -187,7 +228,7 @@ export default function Navbar() {
 
                 {/* Logout Button */}
                 <button
-                  onClick={logout}
+                  onClick={handleLogout}
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-colors"
                 >
                   <LogOut className="w-4 h-4" />
@@ -218,30 +259,20 @@ export default function Navbar() {
         </div>
       </div>
 
-      {/* Mobile Drawer Menu */}
+      {/* Mobile Drawer */}
       {mobileMenuOpen && (
         <div className="md:hidden border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 pt-2 pb-6 space-y-3">
-          <Link
-            href="/"
-            className="block py-2 text-base font-semibold text-slate-700 dark:text-slate-200"
-          >
+          <Link href="/" className="block py-2 text-base font-semibold text-slate-700 dark:text-slate-200">
             Home
           </Link>
-          <Link
-            href="/upcoming-events"
-            className="block py-2 text-base font-semibold text-slate-700 dark:text-slate-200"
-          >
+          <Link href="/upcoming-events" className="block py-2 text-base font-semibold text-slate-700 dark:text-slate-200">
             Upcoming Events
           </Link>
 
           {user ? (
             <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
               <div className="flex items-center gap-3 py-2">
-                <img
-                  src={user.photoURL}
-                  alt={user.name}
-                  className="w-9 h-9 rounded-full object-cover ring-2 ring-emerald-500"
-                />
+                <img src={user.photoURL} alt={user.name} className="w-9 h-9 rounded-full object-cover ring-2 ring-emerald-500" />
                 <div>
                   <p className="text-sm font-bold text-slate-900 dark:text-white">{user.name}</p>
                   <p className="text-xs text-slate-500">{user.email}</p>
@@ -259,19 +290,13 @@ export default function Navbar() {
               <Link href="/profile" className="block py-2 text-sm text-slate-700 dark:text-slate-300">
                 My Profile
               </Link>
-              <button
-                onClick={logout}
-                className="w-full text-left py-2 text-sm font-semibold text-rose-600 dark:text-rose-400"
-              >
+              <button onClick={handleLogout} className="w-full text-left py-2 text-sm font-semibold text-rose-600 dark:text-rose-400">
                 Logout
               </button>
             </div>
           ) : (
             <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
-              <Link
-                href="/login"
-                className="block text-center py-2.5 px-4 font-semibold text-white bg-emerald-600 rounded-xl"
-              >
+              <Link href="/login" className="block text-center py-2.5 px-4 font-semibold text-white bg-emerald-600 rounded-xl">
                 Login / Register
               </Link>
             </div>

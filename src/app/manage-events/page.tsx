@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
+import { authClient } from '@/lib/auth-client';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import {
   Calendar,
@@ -31,7 +32,11 @@ export default function ManageEventsPage() {
 }
 
 function ManageEventsContent() {
-  const { user, token } = useAuth();
+  const { user: contextUser, token: contextToken } = useAuth();
+  const { data: session } = authClient.useSession();
+  const sessionUser = (session as any)?.user;
+  const user = sessionUser || contextUser;
+
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -49,10 +54,36 @@ function ManageEventsContent() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  const getActiveToken = async () => {
+    let t = contextToken || (typeof window !== 'undefined' ? localStorage.getItem('kindred_token') : null);
+    if (!t && user?.email) {
+      try {
+        const jwtRes = await fetch(`${API_BASE}/auth/social-login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: user.email,
+            name: user.name || 'Volunteer',
+            photoURL: (user as any).image || (user as any).photoURL || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+          }),
+        });
+        if (jwtRes.ok) {
+          const jwtData = await jwtRes.json();
+          t = jwtData.token;
+          localStorage.setItem('kindred_token', jwtData.token);
+          localStorage.setItem('kindred_user', JSON.stringify(jwtData.user));
+        }
+      } catch (e) {}
+    }
+    return t;
+  };
+
   const fetchUserEvents = async () => {
-    if (!token) return;
     try {
       setLoading(true);
+      const token = await getActiveToken();
+      if (!token) return;
+
       const res = await fetch(`${API_BASE}/events/user/created`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -69,7 +100,7 @@ function ManageEventsContent() {
 
   useEffect(() => {
     fetchUserEvents();
-  }, [token]);
+  }, [user, contextToken]);
 
   const openEditModal = (event: any) => {
     setEditingEvent(event);
@@ -79,7 +110,6 @@ function ManageEventsContent() {
     setEditThumbnail(event.thumbnail);
     setEditLocation(event.location);
 
-    // Format ISO string to datetime-local format
     const d = new Date(event.eventDate);
     d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
     setEditDate(d.toISOString().slice(0, 16));
@@ -113,6 +143,7 @@ function ManageEventsContent() {
 
     setSaving(true);
     try {
+      const token = await getActiveToken();
       const res = await fetch(`${API_BASE}/events/${editingEvent._id}`, {
         method: 'PUT',
         headers: {
@@ -147,6 +178,7 @@ function ManageEventsContent() {
   const handleDelete = async (id: string) => {
     setIsDeleting(true);
     try {
+      const token = await getActiveToken();
       const res = await fetch(`${API_BASE}/events/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
@@ -168,7 +200,6 @@ function ManageEventsContent() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8">
-      {/* Page Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-6 border-b border-slate-200 dark:border-slate-800">
         <div>
           <span className="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
@@ -191,7 +222,6 @@ function ManageEventsContent() {
         </Link>
       </div>
 
-      {/* Events Table / List */}
       {loading ? (
         <div className="min-h-[40vh] flex flex-col items-center justify-center gap-3">
           <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
@@ -240,10 +270,13 @@ function ManageEventsContent() {
                           <img
                             src={evt.thumbnail}
                             alt={evt.title}
+                            referrerPolicy="no-referrer"
                             className="w-12 h-12 rounded-xl object-cover ring-1 ring-slate-200 dark:ring-slate-700 shrink-0"
                             onError={(e) => {
-                              (e.target as HTMLImageElement).src =
-                                'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?auto=format&fit=crop&w=200&q=80';
+                              const target = e.target as HTMLImageElement;
+                              if (target.src !== 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?auto=format&fit=crop&w=200&q=80') {
+                                target.src = 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?auto=format&fit=crop&w=200&q=80';
+                              }
                             }}
                           />
                           <div>
@@ -300,7 +333,6 @@ function ManageEventsContent() {
         </div>
       )}
 
-      {/* UPDATE EVENT MODAL */}
       {editingEvent && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
           <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 sm:p-8 space-y-6 max-h-[90vh] overflow-y-auto">
@@ -423,7 +455,6 @@ function ManageEventsContent() {
         </div>
       )}
 
-      {/* DELETE CONFIRMATION DIALOG */}
       {deletingId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
           <div className="w-full max-w-sm bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 space-y-4 shadow-2xl">

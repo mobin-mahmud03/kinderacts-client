@@ -3,9 +3,9 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useAuth } from '@/context/AuthContext';
 import { HeartHandshake, User, Mail, Image, Lock, UserPlus, ArrowRight, Check, X } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { authClient } from '@/lib/auth-client';
 
 export default function RegisterPage() {
   const [name, setName] = useState('');
@@ -13,14 +13,12 @@ export default function RegisterPage() {
   const [photoURL, setPhotoURL] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const { register } = useAuth();
   const router = useRouter();
 
-  // Password validation checks
+  // Strict Assignment Password validation checks
   const hasUpperCase = /[A-Z]/.test(password);
   const hasLowerCase = /[a-z]/.test(password);
   const hasMinLength = password.length >= 6;
-  const isPasswordValid = hasUpperCase && hasLowerCase && hasMinLength;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,7 +33,7 @@ export default function RegisterPage() {
       return;
     }
 
-    // Strict assignment password requirements check:
+    // Password validation rules (Assignment requirements)
     if (!hasUpperCase) {
       toast.error('Password must contain at least one uppercase letter (A-Z).');
       return;
@@ -52,16 +50,51 @@ export default function RegisterPage() {
     }
 
     setLoading(true);
-    const success = await register(
-      name,
-      email,
-      photoURL || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80',
-      password
-    );
-    setLoading(false);
+    try {
+      const defaultAvatar = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80';
+      const userPhoto = photoURL.trim() || defaultAvatar;
 
-    if (success) {
-      router.push('/');
+      // ১. BetterAuth দিয়ে রেজিস্ট্রেশন (Cookies সেট করবে)
+      const res = await authClient.signUp.email({
+        name: name.trim(),
+        email: email.trim(),
+        password: password,
+        image: userPhoto,
+      });
+
+      if (res.error) {
+        toast.error(res.error.message || 'Registration failed.');
+      } else {
+        // ২. ব্যাকএন্ডের সাথে JWT টোকেন সিঙ্ক (যাতে Create Event এ সমস্যা না হয়)
+        try {
+          const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+          const jwtRes = await fetch(`${apiBase}/auth/social-login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: name.trim(),
+              email: email.trim(),
+              photoURL: userPhoto,
+            }),
+          });
+
+          if (jwtRes.ok) {
+            const jwtData = await jwtRes.json();
+            localStorage.setItem('kindred_token', jwtData.token);
+            localStorage.setItem('kindred_user', JSON.stringify(jwtData.user));
+          }
+        } catch (syncErr) {
+          console.error('JWT Sync error:', syncErr);
+        }
+
+        toast.success('Registration successful! Welcome to KindredActs.');
+        router.refresh(); // নাবার তাৎক্ষণিক রিফ্রেশ
+        router.push('/');
+      }
+    } catch (error) {
+      toast.error('An error occurred during registration.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -83,7 +116,6 @@ export default function RegisterPage() {
 
         {/* Register Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Name */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5">
               Full Name *
@@ -101,7 +133,6 @@ export default function RegisterPage() {
             </div>
           </div>
 
-          {/* Email */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5">
               Email Address *
@@ -119,7 +150,6 @@ export default function RegisterPage() {
             </div>
           </div>
 
-          {/* photoURL */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5">
               Profile Photo URL
@@ -130,13 +160,12 @@ export default function RegisterPage() {
                 type="url"
                 value={photoURL}
                 onChange={(e) => setPhotoURL(e.target.value)}
-                placeholder="https://example.com/avatar.jpg (Optional)"
+                placeholder="https://images.unsplash.com/photo-... (Optional)"
                 className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
               />
             </div>
           </div>
 
-          {/* Password */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5">
               Password *
@@ -153,7 +182,7 @@ export default function RegisterPage() {
               />
             </div>
 
-            {/* Password Validation Requirements Checklist */}
+            {/* Validation Checklist */}
             <div className="mt-2.5 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 space-y-1.5 text-xs">
               <p className="font-bold text-slate-700 dark:text-slate-300 text-[11px] uppercase tracking-wider">
                 Password Requirements:
@@ -203,7 +232,6 @@ export default function RegisterPage() {
           </button>
         </form>
 
-        {/* Redirect link to Login */}
         <p className="text-center text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-800">
           Already have an account?{' '}
           <Link

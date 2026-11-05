@@ -4,14 +4,13 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
+import { authClient } from '@/lib/auth-client';
 import {
   Calendar,
   MapPin,
-  Tag,
   ArrowLeft,
   CheckCircle2,
   Users,
-  ShieldCheck,
   Share2,
   Loader2,
   Clock
@@ -24,7 +23,12 @@ export default function EventDetailsPage() {
   const params = useParams();
   const id = params?.id as string;
   const router = useRouter();
-  const { user, token } = useAuth();
+
+  // BetterAuth session ও Context
+  const { data: session } = authClient.useSession();
+  const { user: contextUser, token: contextToken } = useAuth();
+
+  const user = (session as { user?: typeof contextUser } | null)?.user || contextUser;
 
   const [event, setEvent] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -58,10 +62,11 @@ export default function EventDetailsPage() {
   // Check if current logged-in user has already joined this event
   useEffect(() => {
     async function checkJoinedStatus() {
-      if (!user || !token) return;
+      const storedToken = contextToken || (typeof window !== 'undefined' ? localStorage.getItem('kindred_token') : null);
+      if (!user || !storedToken) return;
       try {
         const res = await fetch(`${API_BASE}/events/user/joined`, {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: { Authorization: `Bearer ${storedToken}` }
         });
         if (res.ok) {
           const data = await res.json();
@@ -74,10 +79,10 @@ export default function EventDetailsPage() {
     }
 
     checkJoinedStatus();
-  }, [user, token, id]);
+  }, [user, contextToken, id]);
 
   const handleJoinEvent = async () => {
-    if (!user || !token) {
+    if (!user) {
       toast.error('Please log in first to join this community event!');
       router.push(`/login?redirect=/events/${id}`);
       return;
@@ -85,11 +90,42 @@ export default function EventDetailsPage() {
 
     setJoining(true);
     try {
+      let activeToken = contextToken || (typeof window !== 'undefined' ? localStorage.getItem('kindred_token') : null);
+
+      // যদি BetterAuth দিয়ে লগইন কিন্তু লোকালস্টোরেজে টোকেন না থাকে, তবে অটোমেটিক JWT সংগ্রহ করা
+      if (!activeToken && user.email) {
+        try {
+          const jwtRes = await fetch(`${API_BASE}/auth/social-login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: user.email,
+              name: user.name || 'Volunteer',
+              photoURL: (user as any).image || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+            }),
+          });
+          if (jwtRes.ok) {
+            const jwtData = await jwtRes.json();
+            activeToken = jwtData.token;
+            localStorage.setItem('kindred_token', jwtData.token);
+            localStorage.setItem('kindred_user', JSON.stringify(jwtData.user));
+          }
+        } catch (e) {
+          console.error('Auto JWT token fetch failed:', e);
+        }
+      }
+
+      if (!activeToken) {
+        toast.error('Please log in first to join this community event!');
+        router.push(`/login?redirect=/events/${id}`);
+        return;
+      }
+
       const res = await fetch(`${API_BASE}/events/${id}/join`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
+          Authorization: `Bearer ${activeToken}`
         }
       });
 
@@ -141,7 +177,6 @@ export default function EventDetailsPage() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
-      {/* Back button */}
       <div>
         <Link
           href="/upcoming-events"
@@ -152,17 +187,18 @@ export default function EventDetailsPage() {
         </Link>
       </div>
 
-      {/* Main Hero Card */}
       <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-xl">
-        {/* Cover Image */}
         <div className="relative w-full h-80 sm:h-96 bg-slate-100 dark:bg-slate-800">
           <img
             src={event.thumbnail}
             alt={event.title}
+            referrerPolicy="no-referrer"
             className="w-full h-full object-cover"
             onError={(e) => {
-              (e.target as HTMLImageElement).src =
-                'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?auto=format&fit=crop&w=1200&q=80';
+              const target = e.target as HTMLImageElement;
+              if (target.src !== 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?auto=format&fit=crop&w=1200&q=80') {
+                target.src = 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?auto=format&fit=crop&w=1200&q=80';
+              }
             }}
           />
           <div className="absolute top-4 left-4">
@@ -179,9 +215,7 @@ export default function EventDetailsPage() {
           </button>
         </div>
 
-        {/* Content Body */}
         <div className="p-6 sm:p-10 space-y-8">
-          {/* Header Title & Date Info */}
           <div className="space-y-4">
             <h1 className="text-2xl sm:text-4xl font-black text-slate-900 dark:text-white tracking-tight leading-tight">
               {event.title}
@@ -214,7 +248,6 @@ export default function EventDetailsPage() {
             </div>
           </div>
 
-          {/* Description Section */}
           <div className="space-y-3 pt-4 border-t border-slate-200 dark:border-slate-800">
             <h2 className="text-lg font-bold text-slate-900 dark:text-white">
               About This Initiative
@@ -224,7 +257,6 @@ export default function EventDetailsPage() {
             </p>
           </div>
 
-          {/* Organizer Info Box */}
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/50 gap-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-sm">
@@ -247,7 +279,6 @@ export default function EventDetailsPage() {
             )}
           </div>
 
-          {/* Join Event Action Area */}
           <div className="pt-6 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div>
               <p className="text-sm font-bold text-slate-900 dark:text-white">

@@ -3,13 +3,13 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
+import { authClient } from '@/lib/auth-client';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import {
   Calendar,
   MapPin,
   Tag,
   Image as ImageIcon,
-  FileText,
   PlusCircle,
   Loader2,
   AlertCircle
@@ -17,7 +17,6 @@ import {
 import toast from 'react-hot-toast';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
-
 const EVENT_TYPES = ['Donation', 'Plantation', 'Cleanup', 'Healthcare', 'Education'];
 
 export default function CreateEventPage() {
@@ -30,7 +29,10 @@ export default function CreateEventPage() {
 
 function CreateEventForm() {
   const router = useRouter();
-  const { user, token } = useAuth();
+  const { user: contextUser, token: contextToken } = useAuth();
+  const { data: session } = authClient.useSession();
+  const sessionUser = (session as any)?.user;
+  const user = sessionUser || contextUser;
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -41,7 +43,6 @@ function CreateEventForm() {
   const [submitting, setSubmitting] = useState(false);
 
   // Compute minimum date-time string (cannot select past date)
-  // Format: YYYY-MM-DDTHH:mm
   const now = new Date();
   now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
   const minDateTime = now.toISOString().slice(0, 16);
@@ -49,7 +50,6 @@ function CreateEventForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Validations
     if (!title.trim() || title.length < 5) {
       toast.error('Event title must be at least 5 characters.');
       return;
@@ -83,11 +83,42 @@ function CreateEventForm() {
 
     setSubmitting(true);
     try {
+      let activeToken = contextToken || (typeof window !== 'undefined' ? localStorage.getItem('kindred_token') : null);
+
+      // Auto-fetch JWT if missing
+      if (!activeToken && user?.email) {
+        try {
+          const jwtRes = await fetch(`${API_BASE}/auth/social-login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: user.email,
+              name: user.name || 'Volunteer',
+              photoURL: (user as any).image || (user as any).photoURL || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+            }),
+          });
+          if (jwtRes.ok) {
+            const jwtData = await jwtRes.json();
+            activeToken = jwtData.token;
+            localStorage.setItem('kindred_token', jwtData.token);
+            localStorage.setItem('kindred_user', JSON.stringify(jwtData.user));
+          }
+        } catch (e) {
+          console.error('Auto JWT token fetch failed:', e);
+        }
+      }
+
+      if (!activeToken) {
+        toast.error('Session expired. Please log in again.');
+        router.push('/login?redirect=/create-event');
+        return;
+      }
+
       const res = await fetch(`${API_BASE}/events`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
+          Authorization: `Bearer ${activeToken}`,
         },
         body: JSON.stringify({
           title: title.trim(),
@@ -96,7 +127,7 @@ function CreateEventForm() {
           thumbnail: thumbnail.trim(),
           location: location.trim(),
           eventDate: new Date(eventDate).toISOString(),
-        })
+        }),
       });
 
       const data = await res.json();
@@ -116,7 +147,6 @@ function CreateEventForm() {
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
       <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl p-8 sm:p-10 space-y-8">
-        {/* Header */}
         <div className="space-y-2 border-b border-slate-200 dark:border-slate-800 pb-6">
           <span className="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
             Organizer Portal
@@ -129,9 +159,7 @@ function CreateEventForm() {
           </p>
         </div>
 
-        {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Title */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5">
               Event Title *
@@ -146,7 +174,6 @@ function CreateEventForm() {
             />
           </div>
 
-          {/* Event Type & Date Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5">
@@ -177,7 +204,7 @@ function CreateEventForm() {
                 <input
                   type="datetime-local"
                   required
-                  min={minDateTime} // Strictly prevents selecting past dates
+                  min={minDateTime}
                   value={eventDate}
                   onChange={(e) => setEventDate(e.target.value)}
                   className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
@@ -186,7 +213,6 @@ function CreateEventForm() {
             </div>
           </div>
 
-          {/* Location & Image URL Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5">
@@ -220,10 +246,25 @@ function CreateEventForm() {
                   className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
                 />
               </div>
+              {thumbnail.trim() && (
+                <div className="mt-2 relative h-28 w-full rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800">
+                  <img
+                    src={thumbnail}
+                    alt="Preview"
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?auto=format&fit=crop&w=800&q=80';
+                    }}
+                  />
+                  <span className="absolute bottom-1 right-2 text-[10px] bg-black/60 text-white px-2 py-0.5 rounded-md backdrop-blur-sm">
+                    Image Preview
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Description */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5">
               Detailed Description & Objectives *
@@ -240,7 +281,6 @@ function CreateEventForm() {
             </div>
           </div>
 
-          {/* Organizer Meta Notice */}
           <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <p className="text-xs text-slate-600 dark:text-slate-300">
@@ -248,7 +288,6 @@ function CreateEventForm() {
             </p>
           </div>
 
-          {/* Submit Button */}
           <button
             type="submit"
             disabled={submitting}
